@@ -3,3 +3,6 @@ cmake-build-debug-cudagcc/*
 vgcore.*
 ex/*.csv
 ex/*.meta
+docs/*
+
+!**/.gitkeep
