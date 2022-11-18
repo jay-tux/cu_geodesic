@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.23)
-project(cudijkstra
+project(cu_geodesic
         VERSION 0.0.1
         LANGUAGES CUDA CXX
-        DESCRIPTION "Dijkstra from multiple points")
+        DESCRIPTION "Geodesic distance inside a 2D polygon")
 
 set(CMAKE_CUDA_COMPILER nvcc)
 set(CMAKE_CUDA_STANDARD 20)
