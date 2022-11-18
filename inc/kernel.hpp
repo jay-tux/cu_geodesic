@@ -30,7 +30,8 @@ struct result {
    */
   std::vector<matrix_pt> distances;
   /**
-   * \brief The point that has been computed to be the farthest away from the center.
+   * \brief The point that has been computed to be the farthest away from the
+   * center.
    */
   point farthest{};
   /**
@@ -45,9 +46,11 @@ struct result {
 struct kernel {
   /**
    * \brief Runs the kernel.
-   * \param granularity The granularity for the kernel (delta for both directions).
+   * \param granularity The granularity for the kernel (delta for both
+   * directions).
    * \param core_cnt The amount of CUDA cores we're allowed to use.
-   * \returns The result (as a cu_geodesic::result), or std::nullopt (if something went wrong).
+   * \returns The result (as a cu_geodesic::result), or std::nullopt (if
+   * something went wrong).
    */
   std::optional<result> operator()(double granularity, size_t core_cnt);
 
@@ -64,6 +67,6 @@ struct kernel {
    */
   point start{};
 };
-}
+} // namespace cu_geodesic
 
 #endif // CU_GEODESIC_KERNEL_HPP

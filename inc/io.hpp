@@ -1,9 +1,9 @@
 #ifndef CU_GEODESIC_IO_HPP
 #define CU_GEODESIC_IO_HPP
 
+#include "segment.hpp"
 #include <string>
 #include <tuple>
-#include "segment.hpp"
 
 /**
  * \brief Namespace containing all code for this project.
@@ -30,8 +30,8 @@ struct loader {
    * \param filename The file to load.
    * \returns The data in the file, ready for processing.
    */
-  static res_t load(const std::string& filename);
+  static res_t load(const std::string &filename);
 };
-}
+} // namespace cu_geodesic
 
 #endif // CU_GEODESIC_IO_HPP

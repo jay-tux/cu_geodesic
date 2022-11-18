@@ -103,17 +103,19 @@ struct polygon {
    * \param idx The vertex index.
    * \returns The vertex at the given index.
    */
-  [[nodiscard]] inline point vertex(size_t idx) const {
-    if(idx < boundary.size()) return boundary[idx].begin;
+  [[nodiscard]] inline point vertex(std::size_t idx) const {
+    if (idx < boundary.size())
+      return boundary[idx].begin;
     idx -= boundary.size();
-    for(const auto & hole : holes) {
-      if(idx < hole.size()) return hole[idx].begin;
+    for (const auto &hole : holes) {
+      if (idx < hole.size())
+        return hole[idx].begin;
       idx -= hole.size();
     }
 
     return {};
   }
 };
-}
+} // namespace cu_geodesic
 
 #endif // CU_GEODESIC_SEGMENT_HPP
