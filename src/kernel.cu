@@ -4,7 +4,7 @@
 #include "cuda_error.hpp"
 #include <iostream>
 
-using namespace cudijkstra;
+using namespace cu_geodesic;
 
  #define LIMITED_DEBUG
 
@@ -383,7 +383,7 @@ __device__ cu_poly::find_res cu_poly::status_for(const point &p) const {
   return { .status = status::POLYGON, .hole_idx = 0 };
 }
 
-__device__ bool cu_poly::intersects_any(const cudijkstra::segment &s) const {
+__device__ bool cu_poly::intersects_any(const segment &s) const {
   for(size_t i = 0; i < boundary.size; i++) {
     if(intersects(s, boundary.data[i]).is_intersection) return true;
   }

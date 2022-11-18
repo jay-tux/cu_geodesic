@@ -8,10 +8,10 @@ int main(int argc, const char **argv) {
     std::cerr << "[ERROR] expected usage: " << argv[0] << " <data file> <core count> <granularity>" << std::endl;
     std::exit(1);
   }
-  const auto &[poly, start, box] = cudijkstra::loader::load(std::string(argv[1]));
+  const auto &[poly, start, box] = cu_geodesic::loader::load(std::string(argv[1]));
   size_t core_count = std::strtol(argv[2], nullptr, 10);
   double gran = std::strtod(argv[3], nullptr);
-  auto kernel = cudijkstra::kernel{ .data = poly, .start_box = box, .start = start };
+  auto kernel = cu_geodesic::kernel{ .data = poly, .start_box = box, .start = start };
   auto _res = kernel(gran, core_count);
   std::cout << "[MAIN]: starting output..." << std::endl;
   if(!_res.has_value()) {

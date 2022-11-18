@@ -4,7 +4,7 @@
 #include <numeric>
 #include "io.hpp"
 
-using namespace cudijkstra;
+using namespace cu_geodesic;
 
 std::vector<segment> read_segm_list(std::istream &strm) {
   std::string line;
