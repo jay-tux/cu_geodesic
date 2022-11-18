@@ -6,25 +6,15 @@
 
 using namespace cu_geodesic;
 
- #define LIMITED_DEBUG
-
-#ifdef LIMITED_DEBUG
-template <typename ... Ts>
-__device__ void debug(const Ts &... args) {
-printf(args...);
-}
-#else
-template <typename ... Ts>
-__device__ void debug(Ts...) {}
-#endif
-
+// copy certain "constants" to gpu memory at compile time
 __device__ const static double d_max = std::numeric_limits<double>::max();
 __device__ const static double inf = std::numeric_limits<double>::infinity();
 __device__ const static double reasonable_delta = 1e-3;
 
-#define CUDA_SAFE_NO_RET(call) {                                                                            \
+// macros around cuda error logger
+#define CUDA_SAFE_NO_RET(call) {                                               \
     cudaError_t err = call;                                                    \
-    if (err != cudaSuccess) {                                                   \
+    if (err != cudaSuccess) {                                                  \
       cuda_log_error(err, #call, __FILE__, __LINE__);                          \
     } \
   }
@@ -32,54 +22,56 @@ __device__ const static double reasonable_delta = 1e-3;
 #define CUDA_SAFE(call)                                                        \
   {                                                                            \
     cudaError_t err = call;                                                    \
-    if (err != cudaSuccess) {                                                   \
+    if (err != cudaSuccess) {                                                  \
       cuda_log_error(err, #call, __FILE__, __LINE__);                          \
       return std::nullopt; \
     } \
   }
 
-#define CUDA_KERNEL(call) { call; cudaError_t err = cudaGetLastError(); if(err != cudaSuccess) {                                                  \
-      cuda_log_error(err, #call, __FILE__, __LINE__);                                                                                             \
-      return std::nullopt;\
+#define CUDA_KERNEL(call) {                                                    \
+      call;                                                                    \
+      cudaError_t err = cudaGetLastError();                                    \
+      if(err != cudaSuccess) {                                                 \
+        cuda_log_error(err, #call, __FILE__, __LINE__);                        \
+        return std::nullopt;                                                   \
     }                                                                          \
   }
 
-__device__ inline bool same_point(const point &p1, const point &p2) {
-  return p1.x == p2.x && p1.y == p2.y;
-}
-
+// result type on GPU
 struct cu_res {
   double distance;
   point pt;
 };
 
-struct project_idx {
-  point res;
-  double dist;
-};
-
+// std::optional<point>, but less fancy and very GPU friendly
 struct intersection {
   bool is_intersection;
   point pt;
 };
 
+// wrapper around GPU pointers for arrays
 template <typename T>
 struct cu_arr {
+  // array size
   size_t size;
+  // array data buffer
   T *data;
 
+  // allocation is only possible on the host
   __host__ static cu_arr<T> alloc(size_t size) {
     cu_arr<T> res { .size = size, .data = nullptr };
     CUDA_SAFE_NO_RET(cudaMallocManaged(&res.data, sizeof(T) * size))
     return res;
   }
 
+  // copies data into the buffer, from anywhere, is only possible on the host
   __host__ static cu_arr<T> copy(size_t size, T *buf) {
     cu_arr<T> res = alloc(size);
     CUDA_SAFE_NO_RET(cudaMemcpy(res.data, buf, sizeof(T) * size, cudaMemcpyKind::cudaMemcpyDefault))
     return res;
   }
 
+  // cleanup is only possible on the host (frees the memory)
   __host__ void cleanup() {
     if(data != nullptr) {
       CUDA_SAFE_NO_RET(cudaFree(data))
@@ -89,26 +81,35 @@ struct cu_arr {
   }
 };
 
+// GPU representation of the polygon (uses cu_arr instead of std::vector)
 struct cu_poly {
+  // the status of a point (outside, inside, in a hole, on any edge)
   enum struct status { OUTSIDE, POLYGON, HOLE, ON_EDGE };
-  struct find_res {
-    status status;
-    size_t hole_idx;
-  };
 
-  [[nodiscard]] __device__ find_res status_for(const point &p) const;
+  // getting the status of a point is only possible on the GPU
+  [[nodiscard]] __device__ status status_for(const point &p) const;
+  // checking if a line segment intersects any edge is only possible on the GPU
   [[nodiscard]] __device__ bool intersects_any(const segment &s) const;
 
+  // the segments in the boundary
   cu_arr<segment> boundary;
+  // the holes (as lists of segments)
   cu_arr<cu_arr<segment>> holes;
 };
 
+// GPU representation of the adjacency graph for the vertices in the polygon
 class cu_graph {
 public:
+  // iterator over the neighbors of a vertex in the graph
   struct iterator {
+    // current index of the point
     size_t idx;
+    // point whose neighbors we're iterating over
     const size_t source;
+    // graph we're using
     const cu_graph &graph;
+
+    // gets the next neighbor (if any) - only mutates, doesn't return anything
     __device__ void operator++() {
       idx++; // increment first
       while(idx < graph.size()) {
@@ -118,11 +119,14 @@ public:
         idx++;
       }
     }
+
+    // checks if we're still in the graph's bounds
     __device__ operator bool() const {
       return idx < graph.size();
     }
   };
 
+  // constructing a graph is only possible on the host
   __host__ cu_graph(const cu_poly *polygon) : polygon{polygon} {
     vertex_count = polygon->boundary.size;
     for(size_t idx = 0; idx < polygon->holes.size; idx++) {
@@ -132,14 +136,17 @@ public:
     cudaMallocManaged(&distances, vertex_count * vertex_count * sizeof(double));
   }
 
+  // cleaning up the graph is only possible on the host (aka free)
   __host__ void clean() {
     if(distances != nullptr)
       cudaFree(distances);
     distances = nullptr;
   }
 
+  // gets a pointer to the adjacency matrix
   __host__ const double *adjacencies() const { return distances; }
 
+  // looks for a pont in the polygon (same as in the CPU polygon structure)
   __device__ const point &vertex(size_t idx) const {
     if(idx < polygon->boundary.size) {
       return polygon->boundary.data[idx].begin;
@@ -153,14 +160,17 @@ public:
     }
   }
 
+  // gets a modifiable reference in the adjacency matrix
   __device__ double &distance_between(size_t idx1, size_t idx2) {
     return distances[idx1 * vertex_count + idx2];
   }
 
+  // gets a non-modifiable reference in the adjacency matrix
   __device__ const double &distance_between(size_t idx1, size_t idx2) const {
     return distances[idx1 * vertex_count + idx2];
   }
 
+  // gets an iterator for the neighbors of a vertex (ready at the first one)
   __device__ iterator neighbors_for(size_t idx) {
     size_t first = 0;
     while(first < size() && isinf(distance_between(idx, first))) first++;
@@ -171,36 +181,49 @@ public:
     };
   }
 
+  // gets the polygon (unmodifiable)
   __device__ const cu_poly &poly() const {
     return *polygon;
   }
 
+  // gets the amount of vertices
   __host__ __device__ size_t size() const {
     return vertex_count;
   }
 
 private:
+  // constant pointer to the polygon (references usually don't behave with CUDA)
   const cu_poly *polygon;
+  // the amount of vertices (aka sqrt(amount of elements in distances))
   size_t vertex_count;
+  // the adjacency matrix
   double *distances = nullptr;
 };
 
+// a simple GPU priority queue (using as little as possible allocations)
 class a_star_queue {
 public:
+  // element type (not to be confused with the node type)
   struct elem {
+    // estimates the total distance/cost (backward + forward)
     [[nodiscard]] __device__ double estimate() const { return until_now + forward; }
+    // backward cost
     double until_now;
+    // forward cost
     double forward;
+    // vertex index
     size_t value;
   };
 
+  // is the queue empty?
   __device__ bool empty() const {
     return _used == 0;
   }
 
+  // enqueues a new node (extending the array if needed)
+  // in that case the array is extended, removes all gravestones
   __device__ void enqueue(const elem &e) {
     if(_size + 1 >= _cap) {
-      // assuming we'll be yeet'ing a bunch of elements
       node *upd = (node *)malloc((size_t)((float)_cap * 1.5) * sizeof(node));
       _cap = (size_t)((float)_cap * 1.5);
       size_t upd_size = 0;
@@ -219,6 +242,8 @@ public:
     _used++;
   }
 
+  // finds the element with the highest priority (the lowest estimated distance)
+  // and removes it (replace it with a gravestone)
   __device__ elem dequeue() {
     double lowest = d_max;
     size_t lowest_idx = 0;
@@ -234,6 +259,7 @@ public:
     return data[lowest_idx].val;
   }
 
+  // frees all data
   __device__ void cleanup() {
     if(data != nullptr) {
       free(data);
@@ -244,6 +270,7 @@ public:
     }
   }
 
+  // looks if a vertex is in the queue & returns queue buffer index
   [[nodiscard]] __device__ size_t find(size_t v) const {
     for(size_t i = 0; i < _size; i++) {
       if(!data[i].is_gravestone && v == data[i].val.value) {
@@ -253,65 +280,51 @@ public:
     return _size;
   }
 
+  // gets a ref to an element by queue buffer index
   __device__ elem &get(size_t idx) {
     return data[idx].val;
   }
 
+  // gets the size of the array (not the used slots, not the capacity)
   [[nodiscard]] __device__ size_t size() const { return _size; }
 
 private:
+  // a node in the queue (less fancy std::optional<elem>)
   struct node {
+    // the value in the node
     elem val;
+    // is this node a gravestone?
     bool is_gravestone;
   };
 
+  // the actual buffer
   node *data = (node *)malloc(64 * sizeof(node));
+  // the next index to be used
   size_t _size = 0;
+  // the amount of actually used slots (_size - amount of gravestones)
   size_t _used = 0;
+  // capacity of the container
   size_t _cap = 64;
 };
 
+// is x between b1 and b2 (taking into accord the ordering between b1 and b2)
 __device__ inline bool between(double b1, double x, double b2) {
   return (b1 < b2) ? (b1 <= x && x <= b2) : (b1 >= x && x >= b2);
 }
 
+// are these points exactly the same?
 __device__ inline bool point_same(const point &p1, const point &p2) {
   return p1.x == p2.x && p1.y == p2.y;
 }
 
+// computes the distance between two points
 __device__ double distance(point p1, point p2) {
   double tmp1 = p1.x - p2.x;
   double tmp2 = p1.y - p2.y;
   return sqrt(tmp1 * tmp1 + tmp2 * tmp2);
 }
 
-__device__ project_idx project_onto(point p, const segment &seg) {
-  // adapted from
-  // https://stackoverflow.com/questions/47481774/getting-point-on-line-segment-that-is-closest-to-another-point
-  point diff = {.x = seg.end.x - seg.begin.x, .y = seg.end.y - seg.begin.y};
-  point to_p = {.x = p.x - seg.begin.x, .y = p.y - seg.begin.y};
-  double len = diff.x * diff.x + diff.y * diff.y;
-  double interp = (to_p.x * diff.x + to_p.y * diff.y) / len;
-  interp = (interp < 0) ? 0 : ((interp > 1) ? 1 : interp); // clamp
-  point project = {.x = seg.begin.x + interp * diff.x,
-                   .y = seg.begin.y + interp * diff.y};
-  double dist = distance(p, project);
-  return {.res = project, .dist = dist};
-}
-
-__device__ point project_onto_closest(point p, const cu_arr<segment> &segments) {
-  double closest = d_max;
-  point res{};
-  for(size_t i = 0; i < segments.size; i++) {
-    auto pr = project_onto(p, segments.data[i]);
-    if(pr.dist < closest) {
-      closest = pr.dist;
-      res = pr.res;
-    }
-  }
-  return res;
-}
-
+// checks if two line segments intersect
 __device__ intersection intersects(const segment &s1, const segment &s2) {
   // check for common end points
   if(point_same(s1.begin, s2.begin) || point_same(s1.begin, s2.end)
@@ -334,6 +347,7 @@ __device__ intersection intersects(const segment &s1, const segment &s2) {
   }
 }
 
+// checks if a point is inside a single polygon
 __device__ bool inside_single(point p, const cu_arr<segment> &polygon) {
   // adapted from https://en.wikipedia.org/wiki/Even%E2%80%93odd_rule
   bool res = false;
@@ -355,34 +369,37 @@ __device__ bool inside_single(point p, const cu_arr<segment> &polygon) {
   return res;
 }
 
+// is this point on the given line segment?
 __device__ bool point_on(const point &p, const segment &s) {
   if(!between(s.begin.x, p.x, s.end.x)) return false;
   double expected_y = s.a * p.x + s.b;
   return abs(expected_y - p.y) <= 1e-9;
 }
 
-__device__ cu_poly::find_res cu_poly::status_for(const point &p) const {
+// implementation for a member function (relies on previous free functions)
+__device__ cu_poly::status cu_poly::status_for(const point &p) const {
   for(size_t i = 0; i < boundary.size; i++) {
-    if(point_on(p, boundary.data[i])) return { .status = status::ON_EDGE, .hole_idx = 0 };
+    if(point_on(p, boundary.data[i])) return status::ON_EDGE;
   }
 
   for(size_t i = 0; i < holes.size; i++) {
     for(size_t j = 0; j < holes.data[i].size; j++) {
-      if(point_on(p, holes.data[i].data[j])) return { .status = status::ON_EDGE, .hole_idx = 0 };
+      if(point_on(p, holes.data[i].data[j])) return status::ON_EDGE;
     }
   }
 
-  if(!inside_single(p, boundary)) { return { .status = status::OUTSIDE, .hole_idx = 0 }; }
+  if(!inside_single(p, boundary)) { return status::OUTSIDE; }
 
   for(size_t i = 0; i < holes.size; i++) {
     if(inside_single(p, holes.data[i])) {
-      return { .status = status::HOLE, .hole_idx = i };
+      return status::HOLE;
     }
   }
 
-  return { .status = status::POLYGON, .hole_idx = 0 };
+  return status::POLYGON;
 }
 
+// implementation for a member function (relies on previous free functions)
 __device__ bool cu_poly::intersects_any(const segment &s) const {
   for(size_t i = 0; i < boundary.size; i++) {
     if(intersects(s, boundary.data[i]).is_intersection) return true;
@@ -397,6 +414,7 @@ __device__ bool cu_poly::intersects_any(const segment &s) const {
   return false;
 }
 
+// computes a line segment from two points
 __device__ segment compute_segment(const point &p1, const point &p2) {
   double tmp = (p2.y - p1.y) / (p2.x - p1.x);
   return {
@@ -407,7 +425,8 @@ __device__ segment compute_segment(const point &p1, const point &p2) {
   };
 }
 
-__device__ point interpolate_from_begin(const segment &s, double delta, bool print = false) {
+// interpolate delta units from the starting point of the segment
+__device__ point interpolate_from_begin(const segment &s, double delta) {
   if(abs(s.begin.x - s.end.x) < 1e-6) {
     // almost-vertical case; "rotate" 90 degrees, interpolate
     double a = (s.end.x - s.begin.x) / (s.end.y - s.begin.y);
@@ -433,15 +452,16 @@ __device__ point interpolate_from_begin(const segment &s, double delta, bool pri
   }
 }
 
-__device__ bool edge_viable(segment s, const cu_graph &graph, bool print = false) {
-  point interpolate = interpolate_from_begin(s, reasonable_delta, print);
+// checks if an edge is viable (entirely inside the polygon, not inside a hole
+__device__ bool edge_viable(segment s, const cu_graph &graph) {
+  point interpolate = interpolate_from_begin(s, reasonable_delta);
   auto inside = graph.poly().status_for(interpolate);
   // check if edge can be entirely within polygon
-  if(inside.status == cu_poly::status::ON_EDGE) {
+  if(inside == cu_poly::status::ON_EDGE) {
     // edge is an edge of the polygon
     return true;
   }
-  else if(inside.status == cu_poly::status::POLYGON) {
+  else if(inside == cu_poly::status::POLYGON) {
     // edge starts inside polygon
     // check for any intersection
     if(!graph.poly().intersects_any(s)) {
@@ -453,6 +473,7 @@ __device__ bool edge_viable(segment s, const cu_graph &graph, bool print = false
   return false;
 }
 
+// computes the graph's adjacency matrix
 __global__ void compute_graph(cu_graph graph, size_t idx_offset) {
   uint idx = threadIdx.x + blockDim.x * blockIdx.x + idx_offset;
   if(idx >= graph.size()) return; // culling
@@ -463,7 +484,7 @@ __global__ void compute_graph(cu_graph graph, size_t idx_offset) {
     point partner = graph.vertex(other);
     segment seg = compute_segment(start, partner);
 
-    if(edge_viable(seg, graph, true)) {
+    if(edge_viable(seg, graph)) {
       double dist = distance(start, partner);
       graph.distance_between(idx, other) = dist;
       graph.distance_between(other, idx) = dist;
@@ -476,6 +497,7 @@ __global__ void compute_graph(cu_graph graph, size_t idx_offset) {
   }
 }
 
+// computes the geodesic distance array (for each vertex to the start)
 __global__ void compute_geodesic_distance(uint max_idx, point start, cu_arr<double> res, cu_graph graph, size_t idx_offset) {
   uint idx = threadIdx.x + blockDim.x * blockIdx.x + idx_offset;
   if(idx >= max_idx) return; // culling
@@ -544,6 +566,7 @@ __global__ void compute_geodesic_distance(uint max_idx, point start, cu_arr<doub
   queue.cleanup();
 }
 
+// computes the distance to the end point using the geodesic distance array
 __global__ void compute_to_point(uint max_idx, point start, cu_graph graph, point min, size_t per_row, double granularity, cu_arr<double> point_dist, cu_res *res, size_t idx_offset) {
   uint idx = threadIdx.x + blockDim.x * blockIdx.x + idx_offset;
   if(idx > max_idx) return; // out of range
@@ -557,7 +580,7 @@ __global__ void compute_to_point(uint max_idx, point start, cu_graph graph, poin
   };
   res[idx].pt = target;
   auto in = graph.poly().status_for(target);
-  if(in.status != cu_poly::status::POLYGON && in.status != cu_poly::status::ON_EDGE) {
+  if(in != cu_poly::status::POLYGON && in != cu_poly::status::ON_EDGE) {
     res[idx].distance = -1.0; // point is out of bounds
     return;
   }
@@ -587,6 +610,7 @@ __global__ void compute_to_point(uint max_idx, point start, cu_graph graph, poin
   res[idx].distance = (isinf(min_dist)) ? -1.0 : min_dist;
 }
 
+// implementation of the kernel wrapper
 __host__ std::optional<result> kernel::operator()(double granularity, size_t core_cnt) {
   // alloc buffers & copy data
   std::cout << "[KERNEL]: allocating GPU memory and copying data..." << std::endl;
@@ -686,7 +710,8 @@ __host__ std::optional<result> kernel::operator()(double granularity, size_t cor
         granularity, to_vertices, res, i
     )))
     CUDA_SAFE(cudaDeviceSynchronize()) // wait for threads to finish
-    std::cout << "\r[KERNEL]:   ran " << i << "/" << total_steps << " (" << (int)((double)i / total_steps * 100) << "%) steps" << std::flush;
+    std::cout << "\r[KERNEL]:   ran " << i << "/" << total_steps << " ("
+              << (int)((double)i / (double)total_steps * 100) << "%) steps" << std::flush;
   }
   std::cout << std::endl << "[KERNEL]: step three finished." << std::endl;
 
